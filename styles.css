@@ -1,0 +1,341 @@
+:root {
+  --bg: #faf8f3;
+  --fg: #1d1b18;
+  --muted: #6f6a62;
+  --surface: #ffffff;
+  --border: #e4dfd5;
+  --accent: #2f6fd6;
+  --page-filter: none;
+
+  --toolbar-h: 52px;
+  --font-size: 19px;
+  --line-height: 1.6;
+  --reader-font: Georgia, "Iowan Old Style", "Palatino Linotype", Palatino, "Times New Roman", serif;
+}
+
+:root[data-theme="sepia"] {
+  --bg: #f4ecd8;
+  --fg: #3b2f1e;
+  --muted: #7a6a52;
+  --surface: #fbf5e6;
+  --border: #e0d3b6;
+  --accent: #9a5b13;
+  --page-filter: sepia(0.25);
+}
+
+:root[data-theme="dark"] {
+  --bg: #121212;
+  --fg: #e3e1dc;
+  --muted: #9a968e;
+  --surface: #1e1e1e;
+  --border: #2e2e2e;
+  --accent: #79a8ff;
+  /* Invert page images so white paper becomes dark, keeping hues roughly intact. */
+  --page-filter: invert(0.92) hue-rotate(180deg);
+}
+
+:root[data-font="sans"] {
+  --reader-font: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
+}
+
+* { box-sizing: border-box; }
+
+html { -webkit-text-size-adjust: 100%; }
+
+body {
+  margin: 0;
+  background: var(--bg);
+  color: var(--fg);
+  font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+  overflow-anchor: none; /* we keep the reading position ourselves when zooming */
+  transition: background-color .2s, color .2s;
+}
+
+button { font: inherit; color: inherit; }
+
+/* ---------- Toolbar ---------- */
+
+#toolbar {
+  position: fixed;
+  inset: 0 0 auto 0;
+  z-index: 10;
+  height: calc(var(--toolbar-h) + env(safe-area-inset-top));
+  padding: env(safe-area-inset-top) 6px 0;
+  display: flex;
+  align-items: center;
+  gap: 2px;
+  background: color-mix(in srgb, var(--bg) 92%, transparent);
+  backdrop-filter: blur(10px);
+  -webkit-backdrop-filter: blur(10px);
+  border-bottom: 1px solid var(--border);
+  transition: transform .25s ease;
+}
+#toolbar.hidden { transform: translateY(-100%); }
+
+.title {
+  flex: 1;
+  min-width: 0;
+  padding: 0 6px;
+  font-weight: 600;
+  font-size: 15px;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.icon-btn {
+  flex: none;
+  width: 44px;
+  height: 44px;
+  display: grid;
+  place-items: center;
+  border: 0;
+  border-radius: 10px;
+  background: transparent;
+  cursor: pointer;
+  -webkit-tap-highlight-color: transparent;
+}
+.icon-btn:active { background: var(--border); }
+.icon-btn svg {
+  width: 22px;
+  height: 22px;
+  fill: none;
+  stroke: currentColor;
+  stroke-width: 1.8;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+}
+.text-btn { font-weight: 600; font-size: 15px; width: 40px; }
+
+#theme-btn .moon { display: none; }
+:root[data-theme="dark"] #theme-btn .sun { display: none; }
+:root[data-theme="dark"] #theme-btn .moon { display: block; }
+
+#progress {
+  position: fixed;
+  inset: 0 0 auto 0;
+  height: 3px;
+  z-index: 11;
+  pointer-events: none;
+}
+#progress-bar {
+  height: 100%;
+  width: 0;
+  background: var(--accent);
+}
+
+/* ---------- Main ---------- */
+
+#main {
+  padding-top: calc(var(--toolbar-h) + env(safe-area-inset-top));
+  padding-bottom: env(safe-area-inset-bottom);
+  min-height: 100vh;
+}
+
+#welcome {
+  display: grid;
+  place-items: center;
+  min-height: calc(100vh - var(--toolbar-h) - 40px);
+  padding: 16px;
+}
+#welcome[hidden] { display: none; }
+
+#dropzone {
+  width: min(100%, 420px);
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 10px;
+  padding: 40px 24px;
+  text-align: center;
+  border: 2px dashed var(--border);
+  border-radius: 18px;
+  background: var(--surface);
+  cursor: pointer;
+  transition: border-color .15s;
+}
+#dropzone.drag, #dropzone:hover { border-color: var(--accent); }
+#dropzone svg {
+  width: 44px; height: 44px;
+  fill: none; stroke: var(--accent); stroke-width: 1.8;
+  stroke-linecap: round; stroke-linejoin: round;
+}
+#dropzone strong { font-size: 20px; }
+#dropzone span { color: var(--muted); font-size: 14px; line-height: 1.5; }
+
+#status {
+  padding: 40px 20px;
+  text-align: center;
+  color: var(--muted);
+}
+
+/* ---------- Reflowed text ---------- */
+
+#reader {
+  max-width: 40em;
+  margin: 0 auto;
+  padding: 20px 16px 30vh;
+  font-family: var(--reader-font);
+  font-size: var(--font-size);
+  line-height: var(--line-height);
+  overflow-wrap: break-word;
+  hyphens: auto;
+  -webkit-hyphens: auto;
+  touch-action: pan-x pan-y; /* let us handle pinch ourselves */
+}
+
+/* Skip layout/paint for chunks that are far off screen: keeps zooming fast on long books. */
+#reader .chunk {
+  content-visibility: auto;
+  contain-intrinsic-size: auto 1200px;
+}
+
+#reader p {
+  margin: 0 0 .9em;
+  text-align: left;
+}
+#reader h2 {
+  font-size: 1.35em;
+  line-height: 1.3;
+  margin: 1.6em 0 .7em;
+}
+#reader h3 {
+  font-size: 1.12em;
+  line-height: 1.35;
+  margin: 1.3em 0 .6em;
+}
+#reader .page-break {
+  height: 0;
+  margin: 0;
+}
+
+/* ---------- Original pages ---------- */
+
+#pages {
+  overflow-x: auto;
+  touch-action: pan-x pan-y;
+}
+#pages .pages-inner {
+  margin: 0 auto;
+  width: calc(100% * var(--page-zoom, 1));
+  max-width: calc(900px * var(--page-zoom, 1));
+}
+#pages .page {
+  position: relative;
+  width: 100%;
+  background: #fff;
+  filter: var(--page-filter);
+}
+#pages canvas {
+  display: block;
+  width: 100%;
+  height: 100%;
+}
+
+/* ---------- Page indicator ---------- */
+
+#page-indicator {
+  position: fixed;
+  right: 12px;
+  bottom: calc(16px + env(safe-area-inset-bottom));
+  z-index: 5;
+  padding: 5px 10px;
+  border-radius: 999px;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  color: var(--muted);
+  font-size: 12px;
+  font-variant-numeric: tabular-nums;
+  pointer-events: none;
+  opacity: 0;
+  transition: opacity .3s;
+}
+#page-indicator.show { opacity: 1; }
+
+/* ---------- Settings sheet ---------- */
+
+#sheet-backdrop {
+  position: fixed;
+  inset: 0;
+  z-index: 20;
+  background: rgba(0, 0, 0, .3);
+}
+
+#sheet {
+  position: fixed;
+  left: 0; right: 0; bottom: 0;
+  z-index: 21;
+  max-width: 520px;
+  margin: 0 auto;
+  padding: 8px 16px calc(20px + env(safe-area-inset-bottom));
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-bottom: 0;
+  border-radius: 18px 18px 0 0;
+  box-shadow: 0 -8px 30px rgba(0, 0, 0, .15);
+}
+.sheet-handle {
+  width: 40px; height: 4px;
+  margin: 4px auto 14px;
+  border-radius: 2px;
+  background: var(--border);
+}
+
+#sheet .row {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  min-height: 48px;
+}
+#sheet .label {
+  flex: none;
+  width: 64px;
+  color: var(--muted);
+  font-size: 14px;
+}
+#sheet .value {
+  flex: none;
+  width: 44px;
+  text-align: right;
+  font-size: 14px;
+  font-variant-numeric: tabular-nums;
+}
+#sheet input[type="range"] {
+  flex: 1;
+  min-width: 0;
+  accent-color: var(--accent);
+}
+body.mode-pages #sheet .text-only { display: none; }
+
+.segmented {
+  flex: 1;
+  display: flex;
+  padding: 3px;
+  gap: 3px;
+  border-radius: 10px;
+  background: var(--bg);
+  border: 1px solid var(--border);
+}
+.segmented button {
+  flex: 1;
+  min-height: 36px;
+  border: 0;
+  border-radius: 7px;
+  background: transparent;
+  font-size: 14px;
+  cursor: pointer;
+}
+.segmented button.active {
+  background: var(--surface);
+  box-shadow: 0 1px 3px rgba(0, 0, 0, .15);
+  font-weight: 600;
+}
+
+.hint {
+  margin: 10px 0 0;
+  color: var(--muted);
+  font-size: 13px;
+  text-align: center;
+}
+
+[hidden] { display: none !important; }
