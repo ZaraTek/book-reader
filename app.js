@@ -30,6 +30,10 @@ const els = {
   tocBtn: $('#toc-btn'),
   toc: $('#toc'),
   tocList: $('#toc-list'),
+  tocHeading: $('#toc-heading'),
+  gotoForm: $('#goto-form'),
+  gotoInput: $('#goto-input'),
+  gotoTotal: $('#goto-total'),
   backBtn: $('#back-btn'),
 };
 
@@ -146,7 +150,8 @@ async function openFile(file) {
   linkCache.clear();
   linkTargets.clear();
   backAnchor = null;
-  els.backBtn.hidden = els.tocBtn.hidden = true;
+  els.backBtn.hidden = els.tocBtn.hidden = els.tocHeading.hidden = true;
+  els.tocList.replaceChildren();
   els.reader.replaceChildren();
   els.pages.replaceChildren();
   els.reader.hidden = els.pages.hidden = true;
@@ -169,6 +174,7 @@ async function openFile(file) {
       document.title = metaTitle;
     }
 
+    els.tocBtn.hidden = false;
     buildToc(token);
     await showMode(token);
   } catch (err) {
@@ -695,6 +701,11 @@ async function followDest(dest, title) {
   const target = await resolveDest(dest).catch(() => null);
   const anchor = target && await destAnchor(target, title);
   if (!anchor) { flash('That link’s destination couldn’t be found'); return; }
+  jumpWithBack(anchor);
+}
+
+/** Jump somewhere, offering a Back button to return to the current spot. */
+function jumpWithBack(anchor) {
   backAnchor = anchorPoint() || { scrollY: window.scrollY };
   jumpTo(anchor);
   els.toolbar.classList.remove('hidden');
@@ -721,7 +732,7 @@ els.backBtn.addEventListener('click', () => {
 async function buildToc(token) {
   const outline = await pdf.getOutline().catch(() => null);
   if (token !== loadToken) return;
-  els.tocBtn.hidden = !outline?.length;
+  els.tocHeading.hidden = !outline?.length;
   if (!outline?.length) return;
 
   const build = (items) => {
@@ -738,6 +749,35 @@ async function buildToc(token) {
   };
   els.tocList.replaceChildren(build(outline));
 }
+
+/** The start of PDF page n in the current view. */
+function pageAnchor(n) {
+  if (settings.mode === 'pages') {
+    const el = els.pages.querySelector(`.page[data-page="${n}"]`);
+    return el && { el, frac: 0 };
+  }
+  const blocks = [...els.reader.querySelectorAll('[data-i]')];
+  const first = blocks.find((b) => +b.dataset.page >= n);
+  // If no paragraph starts on page n, it's the middle of one that began earlier.
+  const el = first && +first.dataset.page === n ? first : blocks.findLast((b) => +b.dataset.page < n) || first;
+  return el && { el, frac: 0 };
+}
+
+els.gotoForm.addEventListener('submit', (e) => {
+  e.preventDefault();
+  const n = Number(els.gotoInput.value);
+  if (!Number.isInteger(n) || n < 1 || n > numPages) {
+    els.gotoInput.setCustomValidity('invalid');
+    els.gotoInput.select();
+    return;
+  }
+  const anchor = pageAnchor(n);
+  if (!anchor) return;
+  els.gotoInput.blur();
+  openSheet(false);
+  jumpWithBack(anchor);
+});
+els.gotoInput.addEventListener('input', () => els.gotoInput.setCustomValidity(''));
 
 function restoreText(pos) {
   let el = null, frac = 0;
@@ -847,7 +887,15 @@ function openSheet(open, sheet = els.sheet) {
   if (open) syncSheet();
 }
 els.settingsBtn.addEventListener('click', () => openSheet(els.sheet.hidden));
-els.tocBtn.addEventListener('click', () => openSheet(els.toc.hidden, els.toc));
+els.tocBtn.addEventListener('click', () => {
+  const current = anchorPoint()?.el.dataset.page;
+  els.gotoInput.value = '';
+  els.gotoInput.placeholder = current || '';
+  els.gotoInput.max = numPages;
+  els.gotoInput.setCustomValidity('');
+  els.gotoTotal.textContent = `of ${numPages}`;
+  openSheet(els.toc.hidden, els.toc);
+});
 els.backdrop.addEventListener('click', () => openSheet(false));
 document.addEventListener('keydown', (e) => { if (e.key === 'Escape') openSheet(false); });
 

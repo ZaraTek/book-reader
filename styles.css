@@ -325,6 +325,43 @@ button { font: inherit; color: inherit; }
   overflow-y: auto;
   overscroll-behavior: contain;
 }
+.goto {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  min-height: 48px;
+  margin-bottom: 10px;
+}
+.goto label {
+  flex: 1;
+  font-weight: 600;
+  font-size: 15px;
+}
+.goto input {
+  width: 80px;
+  min-height: 40px;
+  padding: 0 10px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: var(--bg);
+  color: var(--fg);
+  font: inherit;
+  font-size: 16px; /* 16px+ stops iOS from zooming the page on focus */
+  text-align: center;
+}
+.goto input:invalid { border-color: #d64545; outline-color: #d64545; }
+.goto .value { color: var(--muted); font-size: 14px; }
+.goto button {
+  min-height: 40px;
+  padding: 0 16px;
+  border: 0;
+  border-radius: 8px;
+  background: var(--accent);
+  color: var(--surface);
+  font-weight: 600;
+  cursor: pointer;
+}
+
 #toc h2 {
   margin: 0 0 6px;
   font-size: 17px;

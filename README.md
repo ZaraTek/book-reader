@@ -14,8 +14,9 @@ continuous scroll of text that reflows to fit your screen, with no page breaks.
 - **Links work**: links inside the PDF, such as a contents page linking to chapters, can be
   tapped in both views. A **Back** button appears for a few seconds after a jump so you can
   return to where you were. Links to websites open in a new tab.
-- **Contents**: if the PDF has bookmarks, the list button in the toolbar shows them, and
-  tapping one jumps to that chapter.
+- **Go to a page**: the list button in the toolbar has a "Go to page" box. Type a page
+  number and tap Go. Back takes you to where you were. If the PDF has bookmarks, the same panel
+  lists them, and tapping one jumps to that chapter.
 - **Zoom**: pinch with two fingers, use the A− / A+ buttons, or use the size slider.
   Your place in the text stays put while you zoom.
 - **Light, sepia, and dark themes**: the moon/sun button switches light and dark; sepia is in
