@@ -27,6 +27,10 @@ const els = {
   sizeValue: $('#size-value'),
   spacingRange: $('#spacing-range'),
   spacingValue: $('#spacing-value'),
+  tocBtn: $('#toc-btn'),
+  toc: $('#toc'),
+  tocList: $('#toc-list'),
+  backBtn: $('#back-btn'),
 };
 
 /* ------------------------------------------------------------------ */
@@ -139,6 +143,10 @@ async function openFile(file) {
 
   docKey = `br.pos:${file.name}:${file.size}`;
   textBuilt = pagesBuilt = false;
+  linkCache.clear();
+  linkTargets.clear();
+  backAnchor = null;
+  els.backBtn.hidden = els.tocBtn.hidden = true;
   els.reader.replaceChildren();
   els.pages.replaceChildren();
   els.reader.hidden = els.pages.hidden = true;
@@ -161,6 +169,7 @@ async function openFile(file) {
       document.title = metaTitle;
     }
 
+    buildToc(token);
     await showMode(token);
   } catch (err) {
     if (token !== loadToken) return;
@@ -220,15 +229,82 @@ const median = (arr) => {
   return s[Math.floor(s.length / 2)];
 };
 
+/*
+ * Text is kept as "segments": runs of text that are either plain or belong to one
+ * PDF link, so links survive being reflowed into paragraphs.
+ */
+function appendSeg(segs, text, link) {
+  const last = segs[segs.length - 1];
+  if (last && last.link === link) last.text += text;
+  else segs.push({ text, link });
+}
+
+/** Collapse whitespace across a line's segments and trim the ends. */
+function normalizeSegs(segs) {
+  const out = [];
+  for (const seg of segs) {
+    let text = seg.text.replace(/\s+/g, ' ');
+    const prev = out[out.length - 1];
+    if ((!prev || prev.text.endsWith(' ')) && text.startsWith(' ')) text = text.slice(1);
+    if (text) appendSeg(out, text, seg.link);
+  }
+  const last = out[out.length - 1];
+  if (last) last.text = last.text.trimEnd();
+  return out.filter((seg) => seg.text);
+}
+
+/** Split a text item into segments according to which link rectangles cover each character. */
+function itemSegments(item, x, y, size, links) {
+  const midY = y + size * 0.35;
+  const hits = links.filter((l) =>
+    midY >= l.rect[1] - 2 && midY <= l.rect[3] + 2 && x < l.rect[2] && x + item.width > l.rect[0]);
+  if (!hits.length) return [{ text: item.str, link: null }];
+
+  // Character positions are estimated, so decide link membership per whole word.
+  const segs = [];
+  const charWidth = item.width / Math.max(item.str.length, 1);
+  const linkAt = (cx) => hits.find((l) => cx >= l.rect[0] && cx <= l.rect[2]) || null;
+  const tokens = [...item.str.matchAll(/\S+|\s+/g)];
+  const wordLinks = tokens.map((t) => (/\S/.test(t[0])
+    ? linkAt(x + (t.index + t[0].length / 2) * charWidth) : undefined));
+  tokens.forEach((t, i) => {
+    let link = wordLinks[i];
+    if (link === undefined) link = wordLinks[i - 1] && wordLinks[i - 1] === wordLinks[i + 1] ? wordLinks[i - 1] : null;
+    appendSeg(segs, t[0], link);
+  });
+  return segs;
+}
+
+/** A page's link annotations, with rectangles normalized to [x1, y1, x2, y2]. */
+const linkCache = new Map();
+function pageLinks(page) {
+  if (!linkCache.has(page.pageNumber)) {
+    linkCache.set(page.pageNumber, page.getAnnotations({ intent: 'display' }).then((annots) =>
+      annots
+        .filter((a) => a.subtype === 'Link' && (a.dest || a.url))
+        .map((a) => {
+          const [x1, y1, x2, y2] = a.rect;
+          return {
+            dest: a.dest || null,
+            url: a.url || null,
+            rect: [Math.min(x1, x2), Math.min(y1, y2), Math.max(x1, x2), Math.max(y1, y2)],
+          };
+        }))
+      .catch(() => []));
+  }
+  return linkCache.get(page.pageNumber);
+}
+
 /** Group a page's text items into visual lines. */
 async function extractLines(page) {
-  const content = await page.getTextContent();
+  const [content, links] = await Promise.all([page.getTextContent(), pageLinks(page)]);
   const lines = [];
   let cur = null;
 
   const push = () => {
     if (cur && cur.text.trim()) {
       cur.text = cur.text.replace(/\s+/g, ' ').trim();
+      cur.segs = normalizeSegs(cur.segs);
       lines.push(cur);
     }
     cur = null;
@@ -240,15 +316,21 @@ async function extractLines(page) {
     const size = Math.hypot(c, d) || Math.hypot(a, b) || item.height || 10;
 
     if (item.str) {
+      const segs = itemSegments(item, x, y, size, links);
       if (cur && Math.abs(y - cur.y) <= size * 0.5) {
         const gap = x - cur.xEnd;
-        if (gap > size * 0.12 && !/\s$/.test(cur.text) && !/^\s/.test(item.str)) cur.text += ' ';
+        if (gap > size * 0.12 && !/\s$/.test(cur.text) && !/^\s/.test(item.str)) {
+          const prevLink = cur.segs[cur.segs.length - 1]?.link;
+          cur.text += ' ';
+          appendSeg(cur.segs, ' ', prevLink === segs[0].link ? prevLink : null);
+        }
         cur.text += item.str;
+        for (const seg of segs) appendSeg(cur.segs, seg.text, seg.link);
         cur.xEnd = Math.max(cur.xEnd, x + item.width);
         cur.size = Math.max(cur.size, size);
       } else {
         push();
-        cur = { text: item.str, x, y, xEnd: x + item.width, size };
+        cur = { text: item.str, segs, x, y, xEnd: x + item.width, size };
       }
     }
     if (item.hasEOL) push();
@@ -284,12 +366,25 @@ function stripFurniture(pagesLines) {
   }));
 }
 
+// A line that is one whole link, e.g. an entry on a contents page.
+const isLinkLine = (l) => l.segs.length === 1 && l.segs[0].link;
+// "Chapter 3 .......... 42" style contents entries.
+const isTocLine = (t) => /(\.\s?){3,}\s*\d+$|…\s*\d+$/.test(t);
+
 const endsSentence = (t) => /[.!?:;…"”’)\]]$/.test(t);
 
-function joinLines(a, b) {
+function joinLines(para, line) {
+  const last = para.segs[para.segs.length - 1];
+  const first = line.segs[0];
   // Re-join words hyphenated across a line break: "exam-" + "ple" → "example".
-  if (/[a-zà-ÿ]-$/i.test(a) && /^[a-zà-ÿ]/.test(b)) return a.slice(0, -1) + b;
-  return a + ' ' + b;
+  if (/[a-zà-ÿ]-$/i.test(para.text) && /^[a-zà-ÿ]/.test(line.text)) {
+    para.text = para.text.slice(0, -1) + line.text;
+    last.text = last.text.slice(0, -1);
+  } else {
+    para.text += ' ' + line.text;
+    appendSeg(para.segs, ' ', last.link === first.link ? last.link : null);
+  }
+  for (const seg of line.segs) appendSeg(para.segs, seg.text, seg.link);
 }
 
 /** Turn every page's lines into a flat list of paragraphs / headings. */
@@ -334,14 +429,20 @@ function buildBlocks(pagesLines) {
           gap > lineGap * 1.45 ||                       // blank space between paragraphs
           Math.abs(prev.size - line.size) > bodySize * 0.15 ||
           (indented && !(prev.x - left > bodySize * 0.8)) || // first-line indent
-          (para.lastShort && endsSentence(prev.text));  // previous line ended early
+          (para.lastShort && endsSentence(prev.text)) || // previous line ended early
+          isTocLine(prev.text) ||
+          ((isLinkLine(prev) || isLinkLine(line)) && prev.segs.at(-1).link !== line.segs[0].link);
       }
 
       if (newBlock) {
         flush();
-        para = { text: line.text, heading, level, page: pageIndex + 1 };
+        para = {
+          text: line.text,
+          segs: line.segs.map((seg) => ({ ...seg })),
+          heading, level, page: pageIndex + 1, y: line.y,
+        };
       } else {
-        para.text = joinLines(para.text, line.text);
+        joinLines(para, line);
       }
       para.lastShort = right - line.xEnd > (right - left) * 0.15;
     });
@@ -380,9 +481,10 @@ async function buildText(token) {
       chunkPage = b.page;
     }
     const el = document.createElement(b.heading ? `h${b.level}` : 'p');
-    el.textContent = b.text;
+    for (const seg of b.segs) el.append(seg.link ? linkElement(seg.link, seg.text) : seg.text);
     el.dataset.i = i;
     el.dataset.page = b.page;
+    el.dataset.y = Math.round(b.y);
     chunk.append(el);
   });
   els.reader.replaceChildren(frag);
@@ -444,7 +546,21 @@ async function renderPage(n, div) {
     await page.render({ canvasContext: canvas.getContext('2d'), viewport }).promise;
   } catch { return; }
   if (rendered.get(n) !== scale) return; // superseded by a newer render
-  div.replaceChildren(canvas);
+
+  // Clickable areas on top of the page image for the PDF's own links.
+  const [vx1, vy1, vx2, vy2] = page.view;
+  const w = vx2 - vx1, h = vy2 - vy1;
+  const overlays = (await pageLinks(page)).map((link) => {
+    const a = linkElement(link);
+    a.className = 'link-overlay';
+    a.style.left = ((link.rect[0] - vx1) / w) * 100 + '%';
+    a.style.top = ((vy2 - link.rect[3]) / h) * 100 + '%';
+    a.style.width = ((link.rect[2] - link.rect[0]) / w) * 100 + '%';
+    a.style.height = ((link.rect[3] - link.rect[1]) / h) * 100 + '%';
+    return a;
+  });
+  if (rendered.get(n) !== scale) return;
+  div.replaceChildren(canvas, ...overlays);
 }
 
 function unrenderPage(n, div) {
@@ -472,11 +588,14 @@ const topOffset = () => els.toolbar.getBoundingClientRect().bottom;
 /** The element at the top of the screen, and how far its top sits from the toolbar. */
 function anchorPoint() {
   const container = settings.mode === 'text' ? els.reader : els.pages;
-  const y = Math.max(topOffset(), 0) + 4;
-  const x = container.getBoundingClientRect().left + container.clientWidth / 2;
-  let el = document.elementFromPoint(Math.min(x, innerWidth - 1), y);
-  if (settings.mode === 'text') el = el?.closest('#reader [data-i]');
-  else el = el?.closest('.page');
+  const x = Math.min(container.getBoundingClientRect().left + container.clientWidth / 2, innerWidth - 1);
+  let el = null, y = 0;
+  // Probe a little further down if the top of the screen is padding or margin.
+  for (const dy of [4, 24, 48, 96]) {
+    y = Math.max(topOffset(), 0) + dy;
+    el = document.elementFromPoint(x, y)?.closest(settings.mode === 'text' ? '#reader [data-i]' : '.page');
+    if (el) break;
+  }
   if (!el) return null;
   const r = el.getBoundingClientRect();
   return { el, frac: r.height ? (y - r.top) / r.height : 0 };
@@ -501,6 +620,125 @@ function savePosition() {
   saveJSON(docKey, pos);
 }
 
+/* ------------------------------------------------------------------ */
+/* Links and table of contents                                         */
+/* ------------------------------------------------------------------ */
+
+const linkTargets = new Map(); // link id → PDF link
+let nextLinkId = 0;
+
+function linkElement(link, text) {
+  const a = document.createElement('a');
+  if (text) a.textContent = text;
+  if (link.url && !link.dest) {
+    a.href = link.url;
+    a.target = '_blank';
+    a.rel = 'noopener noreferrer';
+  } else {
+    const id = String(nextLinkId++);
+    linkTargets.set(id, link);
+    a.href = '#';
+    a.dataset.link = id;
+  }
+  return a;
+}
+
+/** Resolve a PDF destination to { page, top } (top is in PDF units, or null). */
+async function resolveDest(dest) {
+  const explicit = typeof dest === 'string' ? await pdf.getDestination(dest) : dest;
+  if (!Array.isArray(explicit)) return null;
+  const [ref, kind, ...args] = explicit;
+  const pageIndex = Number.isInteger(ref) ? ref : await pdf.getPageIndex(ref);
+  let top = null;
+  switch (kind?.name) {
+    case 'XYZ': top = args[1]; break;
+    case 'FitH': case 'FitBH': top = args[0]; break;
+    case 'FitR': top = args[3]; break;
+  }
+  return { page: pageIndex + 1, top: typeof top === 'number' ? top : null };
+}
+
+/** Find where a destination lands in the current view, as an anchor for scrollToAnchor. */
+const normTitle = (t) => t.toLowerCase().replace(/[^\p{L}\p{N}]+/gu, ' ').trim();
+
+async function destAnchor({ page, top }, title) {
+  if (settings.mode === 'pages') {
+    const el = els.pages.querySelector(`.page[data-page="${page}"]`);
+    if (!el) return null;
+    if (top == null) return { el, frac: 0 };
+    const [, y1, , y2] = (await pdf.getPage(page)).view;
+    return { el, frac: clamp((y2 - top) / (y2 - y1), 0, 1) };
+  }
+  const blocks = [...els.reader.querySelectorAll('[data-i]')];
+  // The first block on that page at or below the target point, else the next page's first block.
+  const onPage = blocks.filter((b) => +b.dataset.page === page);
+  // Bookmarks often point at just a page; if a block on it starts with the bookmark's title, go there.
+  const wanted = title && normTitle(title);
+  const titled = wanted && onPage.find((b) => normTitle(b.textContent).startsWith(wanted));
+  const el = titled || (top == null ? onPage[0] : onPage.find((b) => +b.dataset.y <= top + 2))
+    || blocks.find((b) => +b.dataset.page > page)
+    || onPage[onPage.length - 1];
+  return el ? { el, frac: 0 } : null;
+}
+
+/** Scroll to an anchor, then correct once lazily-laid-out content around it has settled. */
+function jumpTo(anchor) {
+  anchor.el.scrollIntoView();
+  scrollToAnchor(anchor);
+  requestAnimationFrame(() => requestAnimationFrame(() => scrollToAnchor(anchor)));
+}
+
+let backTimer = 0;
+let backAnchor = null;
+
+async function followDest(dest, title) {
+  const target = await resolveDest(dest).catch(() => null);
+  const anchor = target && await destAnchor(target, title);
+  if (!anchor) { flash('That link’s destination couldn’t be found'); return; }
+  backAnchor = anchorPoint() || { scrollY: window.scrollY };
+  jumpTo(anchor);
+  els.toolbar.classList.remove('hidden');
+  els.backBtn.hidden = false;
+  clearTimeout(backTimer);
+  backTimer = setTimeout(() => { els.backBtn.hidden = true; }, 15000);
+}
+
+document.addEventListener('click', (e) => {
+  const a = e.target.closest('a[data-link]');
+  if (!a) return;
+  e.preventDefault();
+  const link = linkTargets.get(a.dataset.link);
+  if (link?.dest) followDest(link.dest, link.title);
+});
+
+els.backBtn.addEventListener('click', () => {
+  if (backAnchor?.el?.isConnected) jumpTo(backAnchor);
+  else if (backAnchor) window.scrollTo(0, backAnchor.scrollY);
+  backAnchor = null;
+  els.backBtn.hidden = true;
+});
+
+async function buildToc(token) {
+  const outline = await pdf.getOutline().catch(() => null);
+  if (token !== loadToken) return;
+  els.tocBtn.hidden = !outline?.length;
+  if (!outline?.length) return;
+
+  const build = (items) => {
+    const ul = document.createElement('ul');
+    for (const item of items) {
+      const li = document.createElement('li');
+      const a = linkElement({ dest: item.dest, url: item.url, title: item.title }, item.title);
+      a.addEventListener('click', () => openSheet(false));
+      li.append(a);
+      if (item.items?.length) li.append(build(item.items));
+      ul.append(li);
+    }
+    return ul;
+  };
+  els.tocList.replaceChildren(build(outline));
+}
+
 function restoreText(pos) {
   let el = null, frac = 0;
   if (pos.text) {
@@ -509,7 +747,7 @@ function restoreText(pos) {
   } else if (pos.page) {
     el = els.reader.querySelector(`[data-page="${pos.page}"]`);
   }
-  if (el) { el.scrollIntoView(); scrollToAnchor({ el, frac }); }
+  if (el) jumpTo({ el, frac });
   else window.scrollTo(0, 0);
 }
 
@@ -559,7 +797,7 @@ let pinchFrame = 0;
 const touchDist = (t) => Math.hypot(t[0].clientX - t[1].clientX, t[0].clientY - t[1].clientY);
 
 document.addEventListener('touchstart', (e) => {
-  if (e.touches.length === 2 && pdf && !els.sheet.contains(e.target)) {
+  if (e.touches.length === 2 && pdf && !e.target.closest('.sheet')) {
     pinch = { start: touchDist(e.touches), zoom: currentZoom() };
     e.preventDefault();
   }
@@ -603,11 +841,13 @@ els.themeBtn.addEventListener('click', () => {
   saveSettings();
 });
 
-function openSheet(open) {
-  els.sheet.hidden = els.backdrop.hidden = !open;
+function openSheet(open, sheet = els.sheet) {
+  els.sheet.hidden = els.toc.hidden = true;
+  sheet.hidden = els.backdrop.hidden = !open;
   if (open) syncSheet();
 }
 els.settingsBtn.addEventListener('click', () => openSheet(els.sheet.hidden));
+els.tocBtn.addEventListener('click', () => openSheet(els.toc.hidden, els.toc));
 els.backdrop.addEventListener('click', () => openSheet(false));
 document.addEventListener('keydown', (e) => { if (e.key === 'Escape') openSheet(false); });
 
@@ -697,7 +937,7 @@ window.addEventListener('scroll', () => {
 
 // Tap the middle of the screen to bring the toolbar back.
 document.addEventListener('click', (e) => {
-  if (e.target.closest('#reader, #pages')) els.toolbar.classList.toggle('hidden');
+  if (e.target.closest('#reader, #pages') && !e.target.closest('a')) els.toolbar.classList.toggle('hidden');
 });
 
 window.addEventListener('resize', () => {

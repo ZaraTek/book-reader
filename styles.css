@@ -204,6 +204,13 @@ button { font: inherit; color: inherit; }
   line-height: 1.35;
   margin: 1.3em 0 .6em;
 }
+#reader a {
+  color: var(--accent);
+  text-decoration: underline;
+  text-decoration-thickness: 1px;
+  text-underline-offset: 2px;
+}
+
 #reader .page-break {
   height: 0;
   margin: 0;
@@ -226,6 +233,13 @@ button { font: inherit; color: inherit; }
   background: #fff;
   filter: var(--page-filter);
 }
+#pages .link-overlay {
+  position: absolute;
+  border-radius: 3px;
+  -webkit-tap-highlight-color: rgba(47, 111, 214, .25);
+}
+#pages .link-overlay:active { background: rgba(47, 111, 214, .2); }
+
 #pages canvas {
   display: block;
   width: 100%;
@@ -252,6 +266,31 @@ button { font: inherit; color: inherit; }
 }
 #page-indicator.show { opacity: 1; }
 
+#back-btn {
+  position: fixed;
+  left: 12px;
+  bottom: calc(16px + env(safe-area-inset-bottom));
+  z-index: 6;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  min-height: 40px;
+  padding: 0 14px 0 10px;
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  background: var(--surface);
+  color: var(--accent);
+  font-size: 14px;
+  font-weight: 600;
+  box-shadow: 0 2px 10px rgba(0, 0, 0, .15);
+  cursor: pointer;
+}
+#back-btn svg {
+  width: 18px; height: 18px;
+  fill: none; stroke: currentColor; stroke-width: 2;
+  stroke-linecap: round; stroke-linejoin: round;
+}
+
 /* ---------- Settings sheet ---------- */
 
 #sheet-backdrop {
@@ -261,7 +300,7 @@ button { font: inherit; color: inherit; }
   background: rgba(0, 0, 0, .3);
 }
 
-#sheet {
+.sheet {
   position: fixed;
   left: 0; right: 0; bottom: 0;
   z-index: 21;
@@ -280,6 +319,32 @@ button { font: inherit; color: inherit; }
   border-radius: 2px;
   background: var(--border);
 }
+
+#toc {
+  max-height: 75vh;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+}
+#toc h2 {
+  margin: 0 0 6px;
+  font-size: 17px;
+}
+#toc ul {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+}
+#toc ul ul { padding-left: 16px; }
+#toc a {
+  display: block;
+  padding: 11px 4px;
+  border-bottom: 1px solid var(--border);
+  color: var(--fg);
+  text-decoration: none;
+  line-height: 1.35;
+}
+#toc ul ul a { color: var(--muted); font-size: 15px; }
+#toc a:active { background: var(--bg); }
 
 #sheet .row {
   display: flex;
