@@ -144,11 +144,15 @@ button { font: inherit; color: inherit; }
 }
 
 #welcome {
-  display: grid;
-  place-items: center;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 28px;
   min-height: calc(100vh - var(--toolbar-h) - 40px);
   padding: 16px;
 }
+#welcome.has-books { justify-content: flex-start; padding-top: 24px; }
 #welcome[hidden] { display: none; }
 
 #dropzone {
@@ -174,6 +178,87 @@ button { font: inherit; color: inherit; }
 #dropzone strong { font-size: 20px; }
 #dropzone span { color: var(--muted); font-size: 14px; line-height: 1.5; }
 
+/* With books saved, the drop zone shrinks to a single row above the library. */
+#welcome.has-books #dropzone {
+  flex-direction: row;
+  gap: 14px;
+  padding: 16px 18px;
+  text-align: left;
+}
+#welcome.has-books #dropzone svg { flex: none; width: 30px; height: 30px; }
+#welcome.has-books #dropzone strong { font-size: 16px; white-space: nowrap; }
+#welcome.has-books #dropzone span { font-size: 13px; }
+#welcome.has-books #dropzone .privacy { display: none; }
+
+/* Text size buttons only make sense with a book open. */
+body:not(.reading) #zoom-in,
+body:not(.reading) #zoom-out { display: none; }
+
+/* ---------- Library ---------- */
+
+#library { width: min(100%, 420px); }
+#library h2 {
+  margin: 0 0 8px 4px;
+  color: var(--muted);
+  font-size: 13px;
+  font-weight: 600;
+  letter-spacing: .06em;
+  text-transform: uppercase;
+}
+#library-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  border: 1px solid var(--border);
+  border-radius: 14px;
+  background: var(--surface);
+  overflow: hidden;
+}
+.book {
+  display: flex;
+  align-items: center;
+  border-bottom: 1px solid var(--border);
+}
+.book:last-child { border-bottom: 0; }
+.book-open {
+  flex: 1;
+  min-width: 0;
+  padding: 14px 6px 14px 16px;
+  border: 0;
+  background: none;
+  text-align: left;
+  cursor: pointer;
+  -webkit-tap-highlight-color: transparent;
+}
+.book-open:active { background: var(--bg); }
+.book-title {
+  font-weight: 600;
+  font-size: 16px;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.book-meta {
+  margin-top: 3px;
+  color: var(--muted);
+  font-size: 13px;
+  font-variant-numeric: tabular-nums;
+}
+.book-bar {
+  height: 3px;
+  margin-top: 8px;
+  border-radius: 2px;
+  background: var(--border);
+  overflow: hidden;
+}
+.book-bar span {
+  display: block;
+  height: 100%;
+  background: var(--accent);
+}
+.book-delete { margin-right: 6px; color: var(--muted); }
+#library .hint { margin-top: 12px; }
+
 #status {
   padding: 40px 20px;
   text-align: center;
@@ -195,10 +280,12 @@ button { font: inherit; color: inherit; }
   touch-action: pan-x pan-y; /* let us handle pinch ourselves */
 }
 
-/* Skip layout/paint for chunks that are far off screen: keeps zooming fast on long books. */
+/* Offscreen chunks skip layout and paint, which keeps zooming fast on long books.
+   app.js keeps their contain-intrinsic-size set to their real height. */
 #reader .chunk {
+  display: flow-root; /* same height whether laid out or skipped */
   content-visibility: auto;
-  contain-intrinsic-size: auto 1200px;
+  contain-intrinsic-size: 1000px;
 }
 
 #reader p {

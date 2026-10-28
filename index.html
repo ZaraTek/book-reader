@@ -23,6 +23,9 @@
     <button id="open-btn" class="icon-btn" aria-label="Open PDF" title="Open PDF">
       <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 4h6l2 2h8v13a1 1 0 0 1-1 1H5a1 1 0 0 1-1-1z"/></svg>
     </button>
+    <button id="library-btn" class="icon-btn" aria-label="Library" title="Library" hidden>
+      <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 4h4v16H4zM10 4h4v16h-4zM16.5 4.6l3.8-1 3.2 15.5-3.9.9z"/></svg>
+    </button>
     <div id="title" class="title">Book Reader</div>
     <button id="zoom-out" class="icon-btn text-btn" aria-label="Smaller text" title="Smaller">A&minus;</button>
     <button id="zoom-in" class="icon-btn text-btn" aria-label="Larger text" title="Larger">A+</button>
@@ -43,8 +46,13 @@
       <label id="dropzone" for="file-input">
         <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 16V4M7 9l5-5 5 5M4 20h16"/></svg>
         <strong>Open a PDF</strong>
-        <span>Tap to choose a file, or drop one here.<br>Your file stays on this device, nothing gets uploaded.</span>
+        <span>Tap to choose a file, or drop one here.<span class="privacy"><br>Your file stays on this device, nothing gets uploaded.</span></span>
       </label>
+      <div id="library" hidden>
+        <h2>Your library</h2>
+        <ul id="library-list"></ul>
+        <p class="hint">Books are saved in this browser on this device only.</p>
+      </div>
     </section>
 
     <div id="status" hidden></div>

@@ -9,6 +9,9 @@ const els = {
   toolbar: $('#toolbar'),
   title: $('#title'),
   openBtn: $('#open-btn'),
+  libraryBtn: $('#library-btn'),
+  library: $('#library'),
+  libraryList: $('#library-list'),
   fileInput: $('#file-input'),
   dropzone: $('#dropzone'),
   welcome: $('#welcome'),
@@ -106,6 +109,7 @@ syncSheet();
 /* ------------------------------------------------------------------ */
 
 let pdf = null;
+let bookId = null;       // library id of the open book: "<file name>:<size>"
 let docKey = null;       // used to remember the reading position per file
 let numPages = 0;
 let textBuilt = false;
@@ -117,7 +121,152 @@ let loadToken = 0;       // cancels stale work when a new file is opened
 /* Opening files                                                       */
 /* ------------------------------------------------------------------ */
 
+/* ------------------------------------------------------------------ */
+/* Library: PDFs saved on this device (IndexedDB)                      */
+/* ------------------------------------------------------------------ */
+
+let dbPromise = null;
+function db() {
+  dbPromise ||= new Promise((resolve, reject) => {
+    const req = indexedDB.open('book-reader', 1);
+    req.onupgradeneeded = () => {
+      req.result.createObjectStore('books', { keyPath: 'id' }); // metadata
+      req.result.createObjectStore('files');                    // id → PDF bytes
+    };
+    req.onsuccess = () => resolve(req.result);
+    req.onerror = () => reject(req.error);
+  });
+  return dbPromise;
+}
+
+const request = (r) => new Promise((resolve, reject) => {
+  r.onsuccess = () => resolve(r.result);
+  r.onerror = () => reject(r.error);
+});
+const completed = (t) => new Promise((resolve, reject) => {
+  t.oncomplete = () => resolve();
+  t.onerror = t.onabort = () => reject(t.error);
+});
+
+const library = {
+  async list() {
+    const books = await request((await db()).transaction('books').objectStore('books').getAll());
+    return books.sort((a, b) => b.lastOpened - a.lastOpened);
+  },
+  async get(id) {
+    return request((await db()).transaction('books').objectStore('books').get(id));
+  },
+  async data(id) {
+    return request((await db()).transaction('files').objectStore('files').get(id));
+  },
+  async add(book, data) {
+    const t = (await db()).transaction(['books', 'files'], 'readwrite');
+    t.objectStore('files').put(data, book.id);
+    t.objectStore('books').put(book);
+    return completed(t);
+  },
+  async update(id, changes) {
+    const t = (await db()).transaction('books', 'readwrite');
+    const books = t.objectStore('books');
+    const r = books.get(id);
+    r.onsuccess = () => { if (r.result) books.put({ ...r.result, ...changes }); };
+    return completed(t);
+  },
+  async remove(id) {
+    const t = (await db()).transaction(['books', 'files'], 'readwrite');
+    t.objectStore('books').delete(id);
+    t.objectStore('files').delete(id);
+    try { localStorage.removeItem(`br.pos:${id}`); } catch { /* storage unavailable */ }
+    return completed(t);
+  },
+};
+
+async function renderLibrary() {
+  const books = await library.list().catch(() => []);
+  if (pdf) return; // a book was opened meanwhile
+  els.welcome.classList.toggle('has-books', books.length > 0);
+  els.library.hidden = !books.length;
+  els.libraryList.replaceChildren(...books.map((book) => {
+    const li = document.createElement('li');
+    li.className = 'book';
+
+    const open = document.createElement('button');
+    open.className = 'book-open';
+    const title = document.createElement('div');
+    title.className = 'book-title';
+    title.textContent = book.title;
+    const meta = document.createElement('div');
+    meta.className = 'book-meta';
+    const pct = Math.round((book.progress || 0) * 100);
+    meta.textContent = book.page && book.numPages
+      ? `Page ${book.page} of ${book.numPages} · ${pct}%`
+      : 'Not started';
+    const bar = document.createElement('div');
+    bar.className = 'book-bar';
+    bar.append(Object.assign(document.createElement('span'), { style: `width: ${pct}%` }));
+    open.append(title, meta, bar);
+    open.addEventListener('click', () => openFromLibrary(book.id));
+
+    const del = document.createElement('button');
+    del.className = 'icon-btn book-delete';
+    del.setAttribute('aria-label', `Remove ${book.title}`);
+    del.innerHTML = '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 7h16M10 11v6M14 11v6M6 7l1 13h10l1-13M9 7V4h6v3"/></svg>';
+    del.addEventListener('click', async () => {
+      if (!confirm(`Remove “${book.title}” from your library?`)) return;
+      await library.remove(book.id).catch(() => {});
+      renderLibrary();
+    });
+
+    li.append(open, del);
+    return li;
+  }));
+}
+
+let persistAsked = false;
+function keepStorage() {
+  // Ask the browser not to clear saved books when the device is low on space.
+  if (persistAsked) return;
+  persistAsked = true;
+  navigator.storage?.persist?.().catch(() => {});
+}
+
+async function openFromLibrary(id) {
+  const [book, data] = await Promise.all([library.get(id), library.data(id)]).catch(() => []);
+  if (!book || !data) {
+    flash('That book couldn’t be loaded from your library');
+    renderLibrary();
+    return;
+  }
+  library.update(id, { lastOpened: Date.now() }).catch(() => {});
+  openBook(book, new Uint8Array(data));
+}
+
+/** Close the open book and show the library. */
+function closeBook() {
+  savePosition();
+  loadToken++;
+  pdf?.destroy();
+  pdf = null;
+  bookId = docKey = null;
+  pageObserver?.disconnect();
+  els.reader.replaceChildren();
+  els.pages.replaceChildren();
+  els.reader.hidden = els.pages.hidden = true;
+  els.backBtn.hidden = els.tocBtn.hidden = els.libraryBtn.hidden = true;
+  els.openBtn.hidden = false;
+  els.pageIndicator.classList.remove('show');
+  els.toolbar.classList.remove('hidden');
+  els.title.textContent = document.title = 'Book Reader';
+  setStatus('');
+  els.welcome.hidden = false;
+  document.body.classList.remove('reading');
+  window.scrollTo(0, 0);
+  updateProgress();
+  renderLibrary();
+}
+
 els.openBtn.addEventListener('click', () => els.fileInput.click());
+els.libraryBtn.addEventListener('click', closeBook);
 els.fileInput.addEventListener('change', () => {
   const file = els.fileInput.files[0];
   if (file) openFile(file);
@@ -141,11 +290,37 @@ document.addEventListener('drop', (e) => {
 });
 
 async function openFile(file) {
+  const data = new Uint8Array(await file.arrayBuffer());
+  const id = `${file.name}:${file.size}`;
+  const saved = await library.get(id).catch(() => null);
+  const book = saved || {
+    id,
+    name: file.name,
+    size: file.size,
+    title: file.name.replace(/\.pdf$/i, ''),
+    added: Date.now(),
+  };
+  if (saved) {
+    library.update(id, { lastOpened: Date.now() }).catch(() => {});
+  } else {
+    library.add({ ...book, lastOpened: Date.now() }, data)
+      .then(keepStorage)
+      .catch((err) => {
+        console.warn(err);
+        flash('Couldn’t save this book to your library (storage may be full)');
+      });
+  }
+  // PDF.js takes ownership of the bytes it's given, so hand it a copy.
+  openBook(book, data.slice());
+}
+
+async function openBook(book, data) {
   const token = ++loadToken;
   if (pdf) { pdf.destroy(); pdf = null; }
   pageObserver?.disconnect();
 
-  docKey = `br.pos:${file.name}:${file.size}`;
+  bookId = book.id;
+  docKey = `br.pos:${book.id}`;
   textBuilt = pagesBuilt = false;
   linkCache.clear();
   linkTargets.clear();
@@ -156,12 +331,14 @@ async function openFile(file) {
   els.pages.replaceChildren();
   els.reader.hidden = els.pages.hidden = true;
   els.welcome.hidden = true;
-  els.title.textContent = file.name.replace(/\.pdf$/i, '');
-  document.title = els.title.textContent;
+  document.body.classList.add('reading');
+  els.openBtn.hidden = true;
+  els.libraryBtn.hidden = false;
+  els.title.textContent = book.title;
+  document.title = book.title;
   setStatus('Opening…');
 
   try {
-    const data = new Uint8Array(await file.arrayBuffer());
     const doc = await pdfjsLib.getDocument({ data }).promise;
     if (token !== loadToken) { doc.destroy(); return; }
     pdf = doc;
@@ -173,6 +350,7 @@ async function openFile(file) {
       els.title.textContent = metaTitle;
       document.title = metaTitle;
     }
+    library.update(book.id, { title: els.title.textContent, numPages }).catch(() => {});
 
     els.tocBtn.hidden = false;
     buildToc(token);
@@ -183,7 +361,12 @@ async function openFile(file) {
     setStatus(err?.name === 'PasswordException'
       ? 'This PDF is password protected and can’t be opened.'
       : 'Sorry, that file couldn’t be read as a PDF.');
-    els.welcome.hidden = false;
+    pdf = null;
+    bookId = docKey = null;
+    els.welcome.hidden = els.openBtn.hidden = false;
+    document.body.classList.remove('reading');
+    els.libraryBtn.hidden = els.tocBtn.hidden = true;
+    renderLibrary();
   }
 }
 
@@ -213,6 +396,7 @@ async function showMode(token = loadToken) {
     els.pages.hidden = true;
     els.reader.hidden = false;
     setStatus('');
+    textLayoutChanged();
     restoreText(pos);
   } else {
     if (!pagesBuilt) await buildPages(token);
@@ -493,8 +677,74 @@ async function buildText(token) {
     el.dataset.y = Math.round(b.y);
     chunk.append(el);
   });
+  for (const c of frag.children) c.dataset.chars = c.textContent.length;
   els.reader.replaceChildren(frag);
   textBuilt = true;
+}
+
+/* ------------------------------------------------------------------ */
+/* Chunk heights                                                       */
+/* ------------------------------------------------------------------ */
+
+// Offscreen chunks skip layout (content-visibility: auto), so the browser places
+// them using contain-intrinsic-size. Estimate it from the text length right away,
+// then measure the real heights in the background so jumps and scrolling are exact.
+
+let lastUserScroll = 0;
+let measureGen = 0;
+let measureTimer = 0;
+
+/** Lay a chunk out for real and return its height. */
+function chunkHeight(chunk) {
+  chunk.style.contentVisibility = 'visible';
+  const h = chunk.offsetHeight;
+  chunk.style.contentVisibility = '';
+  return h;
+}
+
+function estimateChunks() {
+  const chunks = [...els.reader.querySelectorAll('.chunk')];
+  const sample = chunks.reduce((a, b) => (+b.dataset.chars > +a.dataset.chars ? b : a), chunks[0]);
+  if (!sample || !+sample.dataset.chars) return;
+  const perChar = chunkHeight(sample) / +sample.dataset.chars;
+  for (const c of chunks) c.style.containIntrinsicSize = Math.round(+c.dataset.chars * perChar) + 'px';
+}
+
+function measureChunks(delay = 400) {
+  const gen = ++measureGen;
+  clearTimeout(measureTimer);
+  const chunks = [...els.reader.querySelectorAll('.chunk')];
+  let i = 0;
+  const step = () => {
+    if (gen !== measureGen || els.reader.hidden) return;
+    // Correcting heights above the screen shifts the page, which would interrupt
+    // a scroll in progress, so wait until the reader is still.
+    if (performance.now() - lastUserScroll < 300 || pinch) {
+      measureTimer = setTimeout(step, 300);
+      return;
+    }
+    const anchor = anchorPoint();
+    const before = anchor?.el.getBoundingClientRect().top;
+    const until = performance.now() + 8;
+    while (i < chunks.length && performance.now() < until) {
+      const c = chunks[i++];
+      c.style.containIntrinsicSize = chunkHeight(c) + 'px';
+    }
+    const shift = anchor ? anchor.el.getBoundingClientRect().top - before : 0;
+    if (Math.abs(shift) > 0.5) {
+      programmaticScrollUntil = performance.now() + 250;
+      window.scrollBy(0, shift);
+    }
+    if (i < chunks.length) measureTimer = setTimeout(step, 16);
+  };
+  measureTimer = setTimeout(step, delay);
+}
+
+/** Call after anything that changes how tall the text is. */
+function textLayoutChanged() {
+  if (!textBuilt || els.reader.hidden) return;
+  estimateChunks();
+  measureChunks();
 }
 
 /* ------------------------------------------------------------------ */
@@ -624,6 +874,13 @@ function savePosition() {
   else pos.pages = { page: +a.el.dataset.page, frac: a.frac };
   pos.page = +a.el.dataset.page;
   saveJSON(docKey, pos);
+
+  const max = document.documentElement.scrollHeight - innerHeight;
+  library.update(bookId, {
+    page: pos.page,
+    progress: max > 0 ? clamp(window.scrollY / max, 0, 1) : 0,
+    lastOpened: Date.now(),
+  }).catch(() => {});
 }
 
 /* ------------------------------------------------------------------ */
@@ -689,9 +946,15 @@ async function destAnchor({ page, top }, title) {
 
 /** Scroll to an anchor, then correct once lazily-laid-out content around it has settled. */
 function jumpTo(anchor) {
+  // Lay out the target's chunk for real so its position inside the chunk is exact.
+  const chunk = anchor.el.closest('.chunk');
+  if (chunk) chunk.style.contentVisibility = 'visible';
   anchor.el.scrollIntoView();
   scrollToAnchor(anchor);
-  requestAnimationFrame(() => requestAnimationFrame(() => scrollToAnchor(anchor)));
+  requestAnimationFrame(() => requestAnimationFrame(() => {
+    scrollToAnchor(anchor);
+    if (chunk) chunk.style.contentVisibility = '';
+  }));
 }
 
 let backTimer = 0;
@@ -809,6 +1072,7 @@ function setZoom(value) {
   if (settings.mode === 'text') settings.fontSize = clamp(value, FONT_MIN, FONT_MAX);
   else settings.pageZoom = clamp(value, ZOOM_MIN, ZOOM_MAX);
   applyTypography();
+  if (settings.mode === 'text') textLayoutChanged();
   if (anchor) scrollToAnchor(anchor);
   if (settings.mode === 'pages') rerenderVisiblePages();
   syncSheet();
@@ -850,6 +1114,9 @@ document.addEventListener('touchmove', (e) => {
   cancelAnimationFrame(pinchFrame);
   pinchFrame = requestAnimationFrame(() => setZoom(pinch ? pinch.zoom * ratio : currentZoom()));
 }, { passive: false });
+
+// A finger on the screen may be about to scroll; treat it like scrolling.
+document.addEventListener('touchmove', () => { lastUserScroll = performance.now(); }, { passive: true });
 
 document.addEventListener('touchend', (e) => {
   if (pinch && e.touches.length < 2) {
@@ -919,6 +1186,7 @@ for (const group of document.querySelectorAll('.segmented')) {
       const anchor = anchorPoint();
       settings.font = value;
       applyFont();
+      textLayoutChanged();
       if (anchor) scrollToAnchor(anchor);
     }
     if (key === 'theme') {
@@ -940,6 +1208,7 @@ els.spacingRange.addEventListener('input', () => {
   const anchor = anchorPoint();
   settings.lineHeight = +els.spacingRange.value;
   applyTypography();
+  textLayoutChanged();
   if (anchor) scrollToAnchor(anchor);
   syncSheet();
   saveSettingsSoon();
@@ -971,6 +1240,7 @@ function updatePageIndicator() {
 window.addEventListener('scroll', () => {
   const y = window.scrollY;
   if (pdf && !pinch && performance.now() > programmaticScrollUntil) {
+    lastUserScroll = performance.now();
     if (y > lastY + 8 && y > 120) els.toolbar.classList.add('hidden');
     else if (y < lastY - 8) els.toolbar.classList.remove('hidden');
   }
@@ -988,8 +1258,17 @@ document.addEventListener('click', (e) => {
   if (e.target.closest('#reader, #pages') && !e.target.closest('a')) els.toolbar.classList.toggle('hidden');
 });
 
+let lastWidth = innerWidth;
 window.addEventListener('resize', () => {
   if (settings.mode === 'pages' && pdf) rerenderVisiblePages();
+  if (innerWidth !== lastWidth && pdf) {
+    // Width changes rewrap the text (e.g. rotating the phone); height changes are just
+    // the browser's address bar showing or hiding.
+    lastWidth = innerWidth;
+    const anchor = anchorPoint();
+    textLayoutChanged();
+    if (anchor) scrollToAnchor(anchor);
+  }
   updateProgress();
 });
 document.addEventListener('visibilitychange', () => { if (document.hidden) savePosition(); });
@@ -1001,3 +1280,5 @@ function flash(text) {
   clearTimeout(indicatorTimer);
   indicatorTimer = setTimeout(() => els.pageIndicator.classList.remove('show'), 3500);
 }
+
+renderLibrary();

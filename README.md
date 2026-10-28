@@ -22,6 +22,11 @@ continuous scroll of text that reflows to fit your screen, with no page breaks.
 - **Light, sepia, and dark themes**: the moon/sun button switches light and dark; sepia is in
   the settings. The first theme follows your system setting.
 - Serif or sans font, and adjustable line spacing.
+- **Library**: every PDF you open is saved in the browser on your device, so it's still there
+  next time. The library shows how far you've read in each book, and tapping one reopens it
+  where you left off. The books button in the toolbar goes back to the library; the trash icon
+  removes a book. Books aren't synced between devices or browsers. On iPhone, adding the reader
+  to your Home Screen keeps Safari from clearing saved books after a few weeks of not using it.
 - Remembers your settings and where you were in each book.
 - The toolbar hides while you scroll down. Tap the text to bring it back.
 - **Private**: the PDF is read on your device and never uploaded anywhere.
